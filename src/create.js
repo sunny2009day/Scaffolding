@@ -5,12 +5,21 @@ import { VERSION } from './utils/constant'
 import path from 'path'
 import fs from 'fs'
 import chalk from 'chalk'
+import { promisify } from "util"; //
+let ncp = require('ncp'); // 实现文件的拷贝功能
+ncp = promisify(ncp);
+
 import validateProjectName from 'validate-npm-package-name'
 import inquirer from 'inquirer';
-import {waitFnloading} from './utils/interaction'
+import {waitFnloading, createSuc, delFolderRecursion} from './utils/interaction'
 
 
-let create = async (projectName, options={}) => {
+/**
+ * 初始化项目
+ * @param {*} projectName 
+ * @param {*} options  默认初始化git
+ */
+let create = async (projectName, options={ git: true}) => {
   if(!projectName) {
     console.log(`> ${chalk.red('Missing required argument <app-name>')}`)
     return
@@ -35,7 +44,7 @@ let create = async (projectName, options={}) => {
   if(fs.existsSync(targetDir)) {
     console.log(options.force)
     if(options.force) {
-      await  fs.remove(targetDir)
+      await  delFolderRecursion(targetDir)
     } else {
       console.log(chalk.bold.blue(`Sun CLI v${VERSION}`))
       if(inCurrent) {
@@ -65,7 +74,8 @@ let create = async (projectName, options={}) => {
           return
         } else if(action === 'overwrite') {
           console.log(`\nRemoving ${chalk.cyan(targetDir)}...`)
-          await fs.remove(targetDir)
+           
+          await delFolderRecursion(targetDir)
         }
       }
     }
@@ -82,10 +92,10 @@ repos = repos.map((item) => item.name); // 获取模板的名字
     choices: repos, // 选则得列表
   });
 
-    // 通过当前选择的项目，拉取对应的版本
+  // 通过当前选择的项目，拉取对应的版本
   // 获取对应的版本号
-  let tags = await waitFnloading(tagList, 'fetch tags ....')(project);
-  tags = tags.map((item) => item.name);
+  let tags = await waitFnloading(tagList, 'fetch tags ....')(project)
+  tags = tags.map((item) => item.name)
 
   const { tag } = await inquirer.prompt({
     name: 'tag',
@@ -95,8 +105,65 @@ repos = repos.map((item) => item.name); // 获取模板的名字
   });
 
   // 把模板放到一个临时目录里存好，以备后期使用
-  const dest = await waitFnloading(downloadLocal, 'download template')(project, tag);
-  console.log('====================:' + dest)
+  const dest = await waitFnloading(downloadLocal, 'download template')(project, tag)
+
+ 
+    /**
+     * 把模板从临时目录中拷贝到当前项目里
+     * 如果有ask.js文件直接下载
+     */
+    if (!fs.existsSync(path.join(dest, 'ask.js'))) {
+      // 复杂的需要模板熏染 渲染后再拷贝
+      // 把template下的文件 拷贝到执行命令的目录下
+      // 在这个目录下 项目名字是否已经存在 如果存在示当前已经存在
+      await ncp(dest, path.resolve(targetDir))
+      createSuc(projectName)
+    } else {
+      // 复杂的模板,把git上的项目下载下来，如果有ask文件就是一个复杂的模板，我们需要用户选择，选择后编译模板
+      // metalsmith--模板编译需要这个包
+      // 需要渲染模板的接口：https://github.com/zhu-cli/vue-template/blob/master/package.json
+  
+      // 1.让用户填信息
+      await new Promise((resolve, reject) => {
+        MetalSmith(__dirname) // 如果你传入路径，默认遍历当前路径下的src文件夹
+          .source(dest)
+          .destination(path.resolve(targetDir))
+          .use(async (files, metal, done) => {
+            const args = require(path.join(dest, 'ask.js'));
+            const obj = await inquirer.prompt(args);
+  
+            const meta = metal.metadata();
+            Object.assign(meta, obj);
+            delete files['ask.js'];
+            done();
+          })
+          .use((files, metal, done) => {
+            const obj = metal.metadata();
+            Reflect.ownKeys(files).forEach(async (file) => {
+              // 是要处理的文件
+              if (file.includes('js') || file.includes('json')) {
+                let content = files[file].contents.toString(); // 文件的内容
+                if (content.includes('<%')) {
+                  content = await render(content, obj);
+                  files[file].contents = Buffer.from(content); // 渲染结果
+                }
+              }
+            });
+            // 2.让用户填写的信息取渲染模板
+            // 根据用户新的输入 下载模板
+            done();
+          })
+          .build((err) => {
+            if (err) {
+              reject();
+            } else {
+              resolve();
+            }
+          });
+      });
+      createSuc(projectName)
+    }
+
 }
 
 export default create;

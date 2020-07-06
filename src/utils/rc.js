@@ -2,7 +2,7 @@ import { RC, DEFAULTS } from "./constant.js";
 //RC是配置文件 DEFAULT是默认配置
 //promisify：异步函数promise化
 import { decode, encode } from "ini"; //格式分析和序列化
-import { promisify } from "util"; //
+import { promisify } from "util";
 import fs from "fs";
 
 let exists = promisify(fs.exists); // 测试某个路径下的文件是否存在
@@ -44,7 +44,7 @@ export let remove = async (k) => {
     await writeFile(RC, encode(opts), "utf8");
   }
 };
-export let getAll = async () => {
+export let getAll = async (k, v) => {
   let has = await exists(RC);
   let opts;
   if (has) {
